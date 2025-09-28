@@ -12,21 +12,25 @@ struct price {
    double bid;
    double ask;
 };
+
 struct positionPrice {
    double buy;
    double sell;
 };
+
 positionPrice orderOpen;
 
 class OrderChain {
    private:
       uint count;
-   protected: 
+   protected:
    public:
 };
+
 ulong orderBuy = 0;
 ulong orderSell = 0;
-
+uchar buyOrderNumber = 1;
+uchar sellOrderNumber = 1;
 
 class Order {
    private:
@@ -34,85 +38,116 @@ class Order {
       MqlTradeResult  result;
       double commission;
 
-   public:
-      MqlTradeResult getOrderInfo() {return result;}
-
-      Order () {}
-
       void writeCommission() {
-         bool rez = HistoryDealGetDouble(result.order, DEAL_COMMISSION, commission);
-         if (!rez) Print(__FUNCTION__,": Error: ", GetLastError());
+         commission = 0.0;
+         if (!HistoryDealGetDouble(result.deal, DEAL_COMMISSION, commission)) {
+            Print(__FUNCTION__, ": Error reading commission: ", GetLastError());
+         }
       }
 
       double lotCalculation(uchar num) {
          double lot = Lot;
-
-         double marginForOneLot = MarketInfo(symbol, MODE_MARGINREQUIRED);
-         double freeMargin = AccountFreeMargin();
-         
-         if (MultiLot != 1)  {
-               for (int i=1; i<num; i++) lot*= MultiLot;
+         if (MultiLot != 1) {
+            for (int i = 1; i < (int)num; i++) {
+               lot *= MultiLot;
+            }
          }
-
          return lot;
-      } 
+      }
 
-      bool OrderOpen(ENUM_ORDER_TYPE type, uchar numberOfOrder) {
+   public:
+      Order() {
+         ZeroMemory(request);
+         ZeroMemory(result);
+         commission = 0.0;
+      }
+
+      MqlTradeResult getOrderInfo() {return result;}
+
+      ulong OrderOpen(ENUM_ORDER_TYPE type, uchar numberOfOrder) {
+         ZeroMemory(request);
+         ZeroMemory(result);
+
          request.action = TRADE_ACTION_DEAL;
          request.magic = Magic;
-         request.symbol =_Symbol;
+         request.symbol = _Symbol;
          request.volume = lotCalculation(numberOfOrder);
          request.type_filling = ORDER_FILLING_FOK;
-         request.deviation = Slippage;
+         request.deviation = (uint)Slippage;
          request.type = type;
+         request.price = (type == ORDER_TYPE_BUY)
+            ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+            : SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-         if (OrderSend(request, result)) {
-            Print(__FUNCTION__,": ",result.comment," Response Code: ",result.retcode);
-            if (result.retcode != 10008 || result.retcode != 10009) return false;
-         } else {
-            Print(__FUNCTION__,": OrderSend return False");
-            return false;
+         if (!OrderSend(request, result)) {
+            Print(__FUNCTION__, ": OrderSend returned false. Error: ", GetLastError());
+            return 0;
+         }
+
+         Print(__FUNCTION__, ": ", result.comment, " Response Code: ", result.retcode);
+         if (result.retcode != 10008 && result.retcode != 10009) {
+            Print(__FUNCTION__, ": unexpected retcode ", result.retcode);
+            return 0;
          }
 
          writeCommission();
+         if (result.order != 0) {
+            return result.order;
+         }
+         return result.deal;
+      }
+
+      bool select(ulong ticket) {
+         if (!PositionSelectByTicket(ticket)) {
+            PrintFormat("PositionSelectByTicket(%I64u) failed. Error %d", ticket, GetLastError());
+            return false;
+         }
          return true;
       }
 
-      void select() {
-         if (!PositionSelectByTicket(result.order)) {
-               PrintFormat("PositionSelectByTicket(%I64u) failed. Error %d", result.order, GetLastError()); 
-               ExpertRemove();
-         };
-      }
-
-      double getProfit() {
-         select(); 
+      double getProfit(ulong ticket) {
+         if (!select(ticket)) {
+            return 0.0;
+         }
          return PositionGetDouble(POSITION_SWAP) + PositionGetDouble(POSITION_PROFIT) + commission;
-      } 
-   };
+      }
+};
+
+Order trade;
 
 int OnInit() {
    return(INIT_SUCCEEDED);
 }
 
 void OnDeinit(const int reason) {
-
 }
 
 void OnTick() {
-   price tick; 
+   price tick;
    tick.bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    tick.ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
-   Comment("Bid: ", tick.bid, "\n", 
-            "Ask: ", tick.ask);
-   
-   if (orderOpen.buy == 0 && orderOpen.sell == 0) {
+   Comment("Bid: ", tick.bid, "\n",
+           "Ask: ", tick.ask);
+
+   if (orderOpen.buy == 0.0 && orderOpen.sell == 0.0) {
       orderOpen.buy = tick.ask + StartDistance * _Point;
       orderOpen.sell = tick.bid - StartDistance * _Point;
-   }
-   else {
-      if (tick.bid >= orderOpen.buy && orderBuy == 0) orderBuy = OrderOpen(ORDER_TYPE_BUY);
-      if (tick.ask <= orderOpen.sell && orderSell == 0) orderSell = OrderOpen(ORDER_TYPE_SELL);
+   } else {
+      if (tick.bid >= orderOpen.buy && orderBuy == 0) {
+         ulong ticket = trade.OrderOpen(ORDER_TYPE_BUY, buyOrderNumber);
+         if (ticket != 0) {
+            orderBuy = ticket;
+            buyOrderNumber++;
+         }
+      }
+
+      if (tick.ask <= orderOpen.sell && orderSell == 0) {
+         ulong ticket = trade.OrderOpen(ORDER_TYPE_SELL, sellOrderNumber);
+         if (ticket != 0) {
+            orderSell = ticket;
+            sellOrderNumber++;
+         }
+      }
    }
 }
