@@ -1,3 +1,9 @@
+//+------------------------------------------------------------------+
+//|                                                         test.mq5 |
+//|                                    Copyright 2025, Bulygin Maxim |
+//|                                                 https://mql5.com |
+//| 05.10.2025 - Initial release                                     |
+//+------------------------------------------------------------------+
 #property copyright "Copyright 2025, Bulygin Maxim"
 #property link      "https://mql5.com"
 #property version   "1.00"

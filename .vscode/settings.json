@@ -24,5 +24,9 @@
     "editor.tabSize": 3,
     "C_Cpp.default.forcedInclude": [
         "c:\\Users\\Maxim\\.vscode\\extensions\\l-i-v.mql-tools-2.2.0\\data\\mql5_en.mqh"
+    ],
+    "cSpell.words": [
+        "Multilot",
+        "Treller"
     ]
 }
