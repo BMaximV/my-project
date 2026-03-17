@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MT5 Optimization Analyzer</title>
+  <style>
+    :root {
+      --text: #1f2430;
+      --muted: #6f7684;
+      --accent: #006d77;
+      --accent-alt: #d97706;
+      --danger: #b42318;
+      --ok: #027a48;
+      --grid: rgba(31, 36, 48, 0.14);
+      --surface: rgba(255, 252, 247, 0.9);
+      --surface-strong: #fffdf8;
+      --border: rgba(31, 36, 48, 0.1);
+      --shadow: 0 18px 50px rgba(31, 36, 48, 0.12);
+      --font-display: Georgia, "Times New Roman", serif;
+      --font-body: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: var(--font-body);
+      background:
+        radial-gradient(circle at top left, rgba(217, 119, 6, 0.22), transparent 28%),
+        radial-gradient(circle at top right, rgba(0, 109, 119, 0.18), transparent 26%),
+        linear-gradient(180deg, #f8f3e9 0%, #f0e8d9 100%);
+    }
+
+    .shell {
+      width: min(1440px, calc(100vw - 24px));
+      margin: 12px auto;
+      padding: 20px;
+      border-radius: 28px;
+      background: rgba(255, 255, 255, 0.55);
+      backdrop-filter: blur(18px);
+      box-shadow: var(--shadow);
+    }
+
+    .hero { display: grid; gap: 12px; margin-bottom: 24px; }
+    .eyebrow { margin: 0; color: var(--accent); text-transform: uppercase; letter-spacing: 0.16em; font-size: 12px; font-weight: 700; }
+    h1 { margin: 0; max-width: 840px; font-family: var(--font-display); font-size: clamp(34px, 5vw, 58px); line-height: 0.96; }
+    .hero p { margin: 0; max-width: 920px; color: var(--muted); line-height: 1.6; }
+
+    .panel, .metric-card, .chart-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      box-shadow: 0 8px 30px rgba(31, 36, 48, 0.06);
+    }
+
+    .panel { padding: 18px; }
+    .metric-card, .chart-card { padding: 16px; }
+    .controls, .metrics-grid, .chart-grid { display: grid; gap: 16px; }
+    .controls { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-bottom: 24px; }
+    .metrics-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-bottom: 24px; }
+    .analysis-layout { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.95fr); gap: 20px; }
+    .chart-grid { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+
+    h2, h3 { margin: 0 0 12px; font-size: 18px; }
+    label { display: grid; gap: 8px; color: var(--muted); font-size: 14px; }
+    input, select, button {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(31, 36, 48, 0.16);
+      background: var(--surface-strong);
+      color: var(--text);
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+      border: none;
+      color: #fff;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent) 0%, #0a9396 100%);
+      box-shadow: 0 12px 24px rgba(0, 109, 119, 0.24);
+    }
+
+    .status { min-height: 20px; margin-top: 12px; color: var(--muted); font-size: 14px; }
+    .status.error { color: var(--danger); }
+    .status.ok { color: var(--ok); }
+    .metric-label { display: block; margin-bottom: 10px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .metric-value { font-size: 28px; font-weight: 700; line-height: 1; }
+    .metric-note, .note, .legend { margin-top: 10px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 14px; }
+    .scroll { max-height: 720px; overflow: auto; }
+    .empty { padding: 28px; text-align: center; color: var(--muted); border: 1px dashed rgba(31, 36, 48, 0.2); border-radius: 18px; background: rgba(255, 255, 255, 0.6); }
+
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 10px 8px; text-align: left; border-bottom: 1px solid rgba(31, 36, 48, 0.08); vertical-align: top; }
+    th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+    svg { width: 100%; height: auto; display: block; }
+
+    @media (max-width: 1100px) { .analysis-layout { grid-template-columns: 1fr; } }
+    @media (max-width: 640px) { .shell { width: calc(100vw - 12px); margin: 6px auto; padding: 14px; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <p class="eyebrow">MT5 XML Analysis</p>
+      <h1>Потоковый анализатор оптимизации для больших XML</h1>
+      <p>
+        Этот интерфейс работает через локальный Python backend и подходит для крупных отчетов MT5.
+        Сервер читает Spreadsheet XML потоково, считает агрегаты и уже потом отдает браузеру компактный JSON.
+      </p>
+    </section>
+
+    <section class="controls">
+      <div class="panel">
+        <h2>Источник</h2>
+        <label>
+          XML-файл из папки `data`
+          <select id="fileSelect"></select>
+        </label>
+        <button id="analyzeButton" type="button">Запустить анализ</button>
+        <div id="status" class="status">Получение списка XML-файлов...</div>
+      </div>
+
+      <div class="panel">
+        <h2>Визуализация</h2>
+        <label>
+          Метрика
+          <select id="metricSelect"></select>
+        </label>
+        <label>
+          Параметр для таблицы
+          <select id="parameterSelect"></select>
+        </label>
+      </div>
+    </section>
+
+    <section id="summarySection" class="metrics-grid"></section>
+
+    <section class="analysis-layout">
+      <div class="panel">
+        <div class="toolbar">
+          <div>
+            <h2>Средняя метрика по значению параметра</h2>
+            <div class="note">Для больших оптимизаций это полезнее полного scatter: видно устойчивые зоны, а не шум отдельных проходов.</div>
+          </div>
+        </div>
+        <div id="charts" class="chart-grid">
+          <div class="empty">После анализа здесь появятся графики.</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="toolbar">
+          <div>
+            <h2>Топ проходов по устойчивости</h2>
+            <div class="note">Лидерборд строится по `Robustness Score`, рассчитанному из Profit, PF, Sharpe, Recovery, DD и числа сделок.</div>
+          </div>
+        </div>
+        <div id="leaderboard" class="scroll">
+          <div class="empty">Нет данных для отображения.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-top: 20px;">
+      <h2>Агрегация по параметру</h2>
+      <div id="parameterTable" class="scroll">
+        <div class="empty">Нет данных для отображения.</div>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-top: 20px;">
+      <h2>Лучшие диапазоны параметров</h2>
+      <div class="note">Здесь показываются не одиночные значения, а непрерывные окна значений параметра с сильным средним `Robustness Score` и достаточным числом прогонов.</div>
+      <div id="bestRanges" class="scroll" style="margin-top: 14px;">
+        <div class="empty">Нет данных для отображения.</div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const state = { files: [], analysis: null };
+
+    const fileSelect = document.getElementById("fileSelect");
+    const analyzeButton = document.getElementById("analyzeButton");
+    const metricSelect = document.getElementById("metricSelect");
+    const parameterSelect = document.getElementById("parameterSelect");
+    const status = document.getElementById("status");
+    const summarySection = document.getElementById("summarySection");
+    const charts = document.getElementById("charts");
+    const leaderboard = document.getElementById("leaderboard");
+    const parameterTable = document.getElementById("parameterTable");
+    const bestRanges = document.getElementById("bestRanges");
+
+    analyzeButton.addEventListener("click", handleAnalyze);
+    metricSelect.addEventListener("change", renderAll);
+    parameterSelect.addEventListener("change", renderParameterTable);
+
+    initialize();
+
+    async function initialize() {
+      try {
+        const response = await fetch("/api/files");
+        const payload = await response.json();
+        state.files = payload.files || [];
+        if (!state.files.length) {
+          setStatus("XML-файлы не найдены в папке инструмента.", true);
+          fileSelect.innerHTML = "";
+          return;
+        }
+
+        fileSelect.innerHTML = state.files.map((file) => `<option value="${escapeHtml(file.path)}">${escapeHtml(file.name)} (${formatNumber(file.size_mb)} MB)</option>`).join("");
+        setStatus(`Найдено XML-файлов: ${state.files.length}.`, false, true);
+      } catch (error) {
+        console.error(error);
+        setStatus("Не удалось получить список XML-файлов. Запусти app.py и обнови страницу.", true);
+      }
+    }
+
+    async function handleAnalyze() {
+      const file = fileSelect.value;
+      if (!file) {
+        setStatus("Выбери XML-файл.", true);
+        return;
+      }
+
+      const query = new URLSearchParams({ file });
+
+      try {
+        clearOutputs();
+        setStatus("Сервер анализирует XML. Для 1.7 GB это может занять заметное время...");
+        const response = await fetch(`/api/analyze?${query.toString()}`);
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "Ошибка анализа.");
+        }
+
+        state.analysis = payload;
+        populateSelect(metricSelect, payload.metrics, "Robustness Score");
+        populateSelect(parameterSelect, payload.parameters, payload.parameters[0]);
+        renderAll();
+        setStatus(`Готово: ${payload.row_count.toLocaleString("ru-RU")} проходов, файл ${payload.file_name}, ${payload.cache_hit ? "из кэша" : "после перерасчета"}.`, false, true);
+      } catch (error) {
+        console.error(error);
+        setStatus(error.message || "Не удалось выполнить анализ.", true);
+      }
+    }
+
+    function populateSelect(select, values, selected) {
+      select.innerHTML = values.map((value) => `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(value)}</option>`).join("");
+    }
+
+    function renderAll() {
+      if (!state.analysis) return;
+      renderSummary();
+      renderCharts();
+      renderLeaderboard();
+      renderParameterTable();
+      renderBestRanges();
+    }
+
+    function renderSummary() {
+      const { analysis } = state;
+      const best = analysis.top_passes[0];
+      const cards = [
+        ["Файл", analysis.file_name, `${formatNumber(analysis.file_size_mb)} MB`],
+        ["Проходов", analysis.row_count.toLocaleString("ru-RU"), analysis.title || "Без заголовка"],
+        ["Период", analysis.duration_days ? `${analysis.duration_days} дней` : "Не определен", "Берется из заголовка отчета MT5"],
+        ["Источник результата", analysis.cache_hit ? "Кэш" : "Свежий расчет", analysis.cache_hit ? "XML не пересчитывался" : "Данные только что агрегированы"],
+        ["Средний Profit", formatNumber(analysis.summary["Profit"]), "По всем проходам"],
+        ["Средний Profit / Month", formatNumber(analysis.summary["Profit / Month"]), "Если период известен"],
+        ["Средний Sharpe", formatNumber(analysis.summary["Sharpe Ratio"]), "По всем проходам"],
+        ["Средний DD %", formatNumber(analysis.summary["Equity DD %"]), "Ниже обычно лучше"],
+        ["Лучший Pass", best ? String(best.Pass) : "n/a", best ? summarizeParameters(best) : "Нет данных"]
+      ];
+
+      summarySection.innerHTML = cards.map(([label, value, note]) => `
+        <article class="metric-card">
+          <span class="metric-label">${escapeHtml(String(label))}</span>
+          <div class="metric-value">${escapeHtml(String(value))}</div>
+          <div class="metric-note">${escapeHtml(String(note))}</div>
+        </article>
+      `).join("");
+    }
+
+    function renderCharts() {
+      const metric = metricSelect.value;
+      const { parameter_stats } = state.analysis;
+      charts.innerHTML = state.analysis.parameters.map((parameter) => {
+        const points = (parameter_stats[parameter] || []).filter((row) => Number.isFinite(Number(row.avg[metric])));
+        if (!points.length) {
+          return `<article class="chart-card"><h3>${escapeHtml(parameter)}</h3><div class="empty">Нет данных.</div></article>`;
+        }
+        return `
+          <article class="chart-card">
+            <h3>${escapeHtml(parameter)}</h3>
+            ${buildLineChart(points, parameter, metric)}
+            <div class="legend">
+              Значений: ${points.length}. Максимум прогонов в точке: ${Math.max(...points.map((point) => point.count)).toLocaleString("ru-RU")}
+            </div>
+          </article>
+        `;
+      }).join("");
+    }
+
+    function buildLineChart(points, xLabel, yLabel) {
+      const width = 420;
+      const height = 260;
+      const pad = { top: 18, right: 16, bottom: 34, left: 44 };
+      const xs = points.map((point) => Number(point.value));
+      const ys = points.map((point) => Number(point.avg[yLabel]));
+      const xMin = Math.min(...xs);
+      const xMax = Math.max(...xs);
+      const yMin = Math.min(...ys);
+      const yMax = Math.max(...ys);
+      const safeX = xMax === xMin ? xMin + 1 : xMax;
+      const safeY = yMax === yMin ? yMin + 1 : yMax;
+      const scaleX = (value) => pad.left + ((value - xMin) / (safeX - xMin)) * (width - pad.left - pad.right);
+      const scaleY = (value) => height - pad.bottom - ((value - yMin) / (safeY - yMin)) * (height - pad.top - pad.bottom);
+      const maxCount = Math.max(...points.map((point) => point.count));
+      const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${scaleX(Number(point.value))} ${scaleY(Number(point.avg[yLabel]))}`).join(" ");
+      const grid = [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+        const y = pad.top + ratio * (height - pad.top - pad.bottom);
+        return `<line x1="${pad.left}" y1="${y}" x2="${width - pad.right}" y2="${y}" stroke="var(--grid)" stroke-width="1" />`;
+      }).join("");
+
+      const marks = points.map((point) => {
+        const radius = 3 + (point.count / maxCount) * 4;
+        const x = scaleX(Number(point.value));
+        const y = scaleY(Number(point.avg[yLabel]));
+        return `
+          <circle cx="${x}" cy="${y}" r="${radius}" fill="rgba(0,109,119,0.24)" stroke="rgba(0,109,119,0.55)" stroke-width="1.2">
+            <title>${escapeHtml(xLabel)}=${formatNumber(point.value)}, ${escapeHtml(yLabel)}=${formatNumber(point.avg[yLabel])}, runs=${point.count}</title>
+          </circle>
+        `;
+      }).join("");
+
+      return `
+        <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(xLabel)} versus ${escapeHtml(yLabel)}">
+          ${grid}
+          <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="#4b5563" stroke-width="1.2" />
+          <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="#4b5563" stroke-width="1.2" />
+          <path d="${path}" fill="none" stroke="var(--accent-alt)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+          ${marks}
+          <text x="${pad.left}" y="${pad.top - 4}" font-size="11" fill="#4b5563">${escapeHtml(formatNumber(yMax))}</text>
+          <text x="${pad.left}" y="${height - pad.bottom + 16}" font-size="11" fill="#4b5563">${escapeHtml(formatNumber(xMin))}</text>
+          <text x="${width - pad.right}" y="${height - pad.bottom + 16}" text-anchor="end" font-size="11" fill="#4b5563">${escapeHtml(formatNumber(xMax))}</text>
+          <text x="${width / 2}" y="${height - 6}" text-anchor="middle" font-size="11" fill="#4b5563">${escapeHtml(xLabel)}</text>
+        </svg>
+      `;
+    }
+
+    function renderLeaderboard() {
+      const rows = state.analysis.top_passes || [];
+      if (!rows.length) {
+        leaderboard.innerHTML = `<div class="empty">Нет данных для рейтинга.</div>`;
+        return;
+      }
+
+      leaderboard.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Pass</th>
+              <th>Score</th>
+              <th>Profit</th>
+              <th>PF</th>
+              <th>DD %</th>
+              <th>Trades</th>
+              <th>Параметры</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row) => `
+              <tr>
+                <td>${escapeHtml(String(row.Pass))}</td>
+                <td>${escapeHtml(formatNumber(row["Robustness Score"]))}</td>
+                <td>${escapeHtml(formatNumber(row["Profit"]))}</td>
+                <td>${escapeHtml(formatNumber(row["Profit Factor"]))}</td>
+                <td>${escapeHtml(formatNumber(row["Equity DD %"]))}</td>
+                <td>${escapeHtml(formatNumber(row["Trades"]))}</td>
+                <td>${escapeHtml(summarizeParameters(row))}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function renderParameterTable() {
+      const parameter = parameterSelect.value;
+      const metric = metricSelect.value;
+      const rows = state.analysis.parameter_stats[parameter] || [];
+      if (!rows.length) {
+        parameterTable.innerHTML = `<div class="empty">Нет агрегированных данных.</div>`;
+        return;
+      }
+
+      parameterTable.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>${escapeHtml(parameter)}</th>
+              <th>Runs</th>
+              <th>Avg ${escapeHtml(metric)}</th>
+              <th>Avg Profit</th>
+              <th>Avg Score</th>
+              <th>Avg DD %</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.slice().sort((a, b) => Number(b.avg["Robustness Score"] ?? -Infinity) - Number(a.avg["Robustness Score"] ?? -Infinity)).map((row) => `
+              <tr>
+                <td>${escapeHtml(formatNumber(row.value))}</td>
+                <td>${row.count.toLocaleString("ru-RU")}</td>
+                <td>${escapeHtml(formatNumber(row.avg[metric]))}</td>
+                <td>${escapeHtml(formatNumber(row.avg["Profit"]))}</td>
+                <td>${escapeHtml(formatNumber(row.avg["Robustness Score"]))}</td>
+                <td>${escapeHtml(formatNumber(row.avg["Equity DD %"]))}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function renderBestRanges() {
+      const entries = Object.entries(state.analysis.best_ranges || {});
+      if (!entries.length) {
+        bestRanges.innerHTML = `<div class="empty">Нет данных по диапазонам.</div>`;
+        return;
+      }
+
+      bestRanges.innerHTML = entries.map(([parameter, rows]) => {
+        if (!rows.length) {
+          return `
+            <article class="chart-card" style="margin-bottom: 14px;">
+              <h3>${escapeHtml(parameter)}</h3>
+              <div class="empty">Для этого параметра нет диапазонов.</div>
+            </article>
+          `;
+        }
+
+        return `
+          <article class="chart-card" style="margin-bottom: 14px;">
+            <h3>${escapeHtml(parameter)}</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Диапазон</th>
+                  <th>Точек</th>
+                  <th>Runs</th>
+                  <th>Min Runs</th>
+                  <th>Avg Score</th>
+                  <th>Avg Profit</th>
+                  <th>Avg DD %</th>
+                  <th>Avg PF</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows.map((row) => `
+                  <tr>
+                    <td>${escapeHtml(formatRange(row.start, row.end))}</td>
+                    <td>${row.points}</td>
+                    <td>${Number(row.runs).toLocaleString("ru-RU")}</td>
+                    <td>${Number(row.stability_floor).toLocaleString("ru-RU")}</td>
+                    <td>${escapeHtml(formatNumber(row.avg_score))}</td>
+                    <td>${escapeHtml(formatNumber(row.avg_profit))}</td>
+                    <td>${escapeHtml(formatNumber(row.avg_dd))}</td>
+                    <td>${escapeHtml(formatNumber(row.avg_pf))}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </article>
+        `;
+      }).join("");
+    }
+
+    function summarizeParameters(row) {
+      return state.analysis.parameters.map((parameter) => `${parameter}=${formatNumber(row[parameter])}`).join(", ");
+    }
+
+    function clearOutputs() {
+      summarySection.innerHTML = "";
+      charts.innerHTML = `<div class="empty">После анализа здесь появятся графики.</div>`;
+      leaderboard.innerHTML = `<div class="empty">Нет данных для отображения.</div>`;
+      parameterTable.innerHTML = `<div class="empty">Нет данных для отображения.</div>`;
+      bestRanges.innerHTML = `<div class="empty">Нет данных для отображения.</div>`;
+    }
+
+    function setStatus(message, isError = false, isOk = false) {
+      status.textContent = message;
+      status.className = `status${isError ? " error" : ""}${isOk ? " ok" : ""}`;
+    }
+
+    function formatNumber(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) {
+        return "n/a";
+      }
+      if (Math.abs(number) >= 1000) {
+        return number.toLocaleString("ru-RU", { maximumFractionDigits: 2 });
+      }
+      return number.toLocaleString("ru-RU", { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function formatRange(start, end) {
+      return Number(start) === Number(end)
+        ? formatNumber(start)
+        : `${formatNumber(start)} .. ${formatNumber(end)}`;
+    }
+  </script>
+</body>
+</html>

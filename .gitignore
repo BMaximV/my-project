@@ -10,6 +10,8 @@
 
 !/Experts/Manual_Robots/
 !/Experts/Manual_Robots/**/*.mq5
+!/Tools/
+!/Tools/**
 
 *.ex4
 *.ex5
@@ -17,3 +19,8 @@
 *.so
 *.tmp
 *.bak
+__pycache__/
+*.pyc
+Tools/MT5OptimizationAnalyzer/cache/
+Tools/MT5OptimizationAnalyzer/data/*.xml
+!Tools/MT5OptimizationAnalyzer/data/.gitkeep
