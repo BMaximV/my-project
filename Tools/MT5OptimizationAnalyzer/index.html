@@ -93,6 +93,10 @@
     .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 14px; }
     .scroll { max-height: 720px; overflow: auto; }
     .empty { padding: 28px; text-align: center; color: var(--muted); border: 1px dashed rgba(31, 36, 48, 0.2); border-radius: 18px; background: rgba(255, 255, 255, 0.6); }
+    .filter-card { padding: 14px; border: 1px solid var(--border); border-radius: 16px; background: rgba(255,255,255,0.72); }
+    .filter-values { display: flex; justify-content: space-between; gap: 12px; margin: 8px 0; color: var(--muted); font-size: 13px; }
+    .range-stack { display: grid; gap: 10px; }
+    .range-stack input[type="range"] { padding: 0; }
 
     table { width: 100%; border-collapse: collapse; font-size: 14px; }
     th, td { padding: 10px 8px; text-align: left; border-bottom: 1px solid rgba(31, 36, 48, 0.08); vertical-align: top; }
@@ -135,6 +139,29 @@
           Параметр для таблицы
           <select id="parameterSelect"></select>
         </label>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-bottom: 24px;">
+      <h2>Фильтры по параметрам</h2>
+      <div class="note">Сдвигай левую и правую границы, чтобы отрезать минимальные и максимальные значения параметров из текущей выборки.</div>
+      <div id="filtersPanel" class="controls" style="margin-top: 14px; margin-bottom: 0;">
+        <div class="empty">Фильтры появятся после первого анализа.</div>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-bottom: 24px;">
+      <div class="toolbar">
+        <div>
+          <h2>Auto Search</h2>
+          <div class="note">Автоматический поиск устойчивых областей параметров внутри текущих границ ползунков.</div>
+        </div>
+        <div style="margin-left: auto; min-width: 220px;">
+          <button id="autoSearchButton" type="button">Найти области</button>
+        </div>
+      </div>
+      <div id="autoSearchResults" class="scroll">
+        <div class="empty">После первого анализа можно запустить автоматический поиск областей.</div>
       </div>
     </section>
 
@@ -182,7 +209,7 @@
     </section>
   </main>
   <script>
-    const state = { files: [], analysis: null };
+    const state = { files: [], analysis: null, activeFilters: null, currentFile: null, previewTimer: null, fullTimer: null, requestSeq: 0, autoSearch: null };
 
     const fileSelect = document.getElementById("fileSelect");
     const analyzeButton = document.getElementById("analyzeButton");
@@ -194,8 +221,12 @@
     const leaderboard = document.getElementById("leaderboard");
     const parameterTable = document.getElementById("parameterTable");
     const bestRanges = document.getElementById("bestRanges");
+    const filtersPanel = document.getElementById("filtersPanel");
+    const autoSearchButton = document.getElementById("autoSearchButton");
+    const autoSearchResults = document.getElementById("autoSearchResults");
 
     analyzeButton.addEventListener("click", handleAnalyze);
+    autoSearchButton.addEventListener("click", handleAutoSearch);
     metricSelect.addEventListener("change", renderAll);
     parameterSelect.addEventListener("change", renderParameterTable);
 
@@ -220,32 +251,78 @@
       }
     }
 
-    async function handleAnalyze() {
+    async function handleAnalyze(previewOnly = false) {
       const file = fileSelect.value;
       if (!file) {
         setStatus("Выбери XML-файл.", true);
         return;
       }
 
-      const query = new URLSearchParams({ file });
+      if (state.currentFile !== file) {
+        state.currentFile = file;
+        state.activeFilters = null;
+      }
 
+      const requestId = ++state.requestSeq;
       try {
-        clearOutputs();
-        setStatus("Сервер анализирует XML. Для 1.7 GB это может занять заметное время...");
-        const response = await fetch(`/api/analyze?${query.toString()}`);
+        if (!previewOnly && !state.analysis) {
+          clearOutputs();
+        }
+        setStatus(previewOnly ? "Быстрый preview по фильтрам..." : "Сервер анализирует XML или обновляет выборку по фильтрам...");
+        const response = await fetch(`/api/analyze?${buildAnalyzeQuery(file, previewOnly)}`);
         const payload = await response.json();
         if (!response.ok) {
           throw new Error(payload.error || "Ошибка анализа.");
         }
+        if (requestId !== state.requestSeq) {
+          return;
+        }
 
-        state.analysis = payload;
-        populateSelect(metricSelect, payload.metrics, "Robustness Score");
-        populateSelect(parameterSelect, payload.parameters, payload.parameters[0]);
-        renderAll();
-        setStatus(`Готово: ${payload.row_count.toLocaleString("ru-RU")} проходов, файл ${payload.file_name}, ${payload.cache_hit ? "из кэша" : "после перерасчета"}.`, false, true);
+        state.analysis = previewOnly && state.analysis ? { ...state.analysis, ...payload } : payload;
+        if (!state.activeFilters) {
+          state.activeFilters = cloneFilters(payload.parameter_bounds);
+        }
+        const selectedMetric = payload.metrics.includes(metricSelect.value) ? metricSelect.value : "Robustness Score";
+        const selectedParameter = payload.parameters.includes(parameterSelect.value) ? parameterSelect.value : payload.parameters[0];
+        populateSelect(metricSelect, payload.metrics, selectedMetric);
+        populateSelect(parameterSelect, payload.parameters, selectedParameter);
+        if (previewOnly) {
+          renderFilters();
+          renderSummary();
+          setStatus(`Preview: ${payload.row_count.toLocaleString("ru-RU")} проходов, скрыто ${payload.filtered_out_count.toLocaleString("ru-RU")} по ползункам.`, false, true);
+        } else {
+          state.autoSearch = null;
+          renderAutoSearch();
+          renderAll();
+          setStatus(`Готово: ${payload.row_count.toLocaleString("ru-RU")} проходов после фильтров, скрыто ${payload.filtered_out_count.toLocaleString("ru-RU")} по ползункам, исключено ${payload.excluded_row_count.toLocaleString("ru-RU")} правилом Trail_Start <= Trail_Distance.`, false, true);
+        }
       } catch (error) {
         console.error(error);
         setStatus(error.message || "Не удалось выполнить анализ.", true);
+      }
+    }
+
+    async function handleAutoSearch() {
+      const file = fileSelect.value;
+      if (!file || !state.analysis) {
+        setStatus("Сначала выполни анализ файла.", true);
+        return;
+      }
+
+      try {
+        autoSearchResults.innerHTML = `<div class="empty">Идет автоматический поиск областей...</div>`;
+        const response = await fetch(`/api/auto_search?${buildAnalyzeQuery(file, false)}`);
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "Ошибка auto search.");
+        }
+        state.autoSearch = payload;
+        renderAutoSearch();
+        setStatus(`Auto Search завершен: найдено областей ${payload.regions.length}.`, false, true);
+      } catch (error) {
+        console.error(error);
+        autoSearchResults.innerHTML = `<div class="empty">Не удалось выполнить auto search.</div>`;
+        setStatus(error.message || "Не удалось выполнить auto search.", true);
       }
     }
 
@@ -255,6 +332,7 @@
 
     function renderAll() {
       if (!state.analysis) return;
+      renderFilters();
       renderSummary();
       renderCharts();
       renderLeaderboard();
@@ -264,10 +342,12 @@
 
     function renderSummary() {
       const { analysis } = state;
-      const best = analysis.top_passes[0];
+      const best = analysis.top_passes && analysis.top_passes.length ? analysis.top_passes[0] : null;
       const cards = [
         ["Файл", analysis.file_name, `${formatNumber(analysis.file_size_mb)} MB`],
         ["Проходов", analysis.row_count.toLocaleString("ru-RU"), analysis.title || "Без заголовка"],
+        ["Скрыто фильтрами", analysis.filtered_out_count.toLocaleString("ru-RU"), "Отсечено ползунками диапазонов"],
+        ["Исключено правилом", analysis.excluded_row_count.toLocaleString("ru-RU"), "Удалены строки, где Trail_Start > Trail_Distance"],
         ["Период", analysis.duration_days ? `${analysis.duration_days} дней` : "Не определен", "Берется из заголовка отчета MT5"],
         ["Источник результата", analysis.cache_hit ? "Кэш" : "Свежий расчет", analysis.cache_hit ? "XML не пересчитывался" : "Данные только что агрегированы"],
         ["Средний Profit", formatNumber(analysis.summary["Profit"]), "По всем проходам"],
@@ -480,6 +560,147 @@
       }).join("");
     }
 
+    function renderAutoSearch() {
+      if (!state.autoSearch || !state.autoSearch.regions || !state.autoSearch.regions.length) {
+        autoSearchResults.innerHTML = `<div class="empty">После первого анализа можно запустить автоматический поиск областей.</div>`;
+        return;
+      }
+
+      autoSearchResults.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Region Score</th>
+              <th>Runs</th>
+              <th>Coverage</th>
+              <th>Avg Score</th>
+              <th>Avg Profit</th>
+              <th>Avg DD %</th>
+              <th>Avg PF</th>
+              <th>Диапазоны</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${state.autoSearch.regions.map((region, index) => `
+              <tr>
+                <td>${escapeHtml(formatNumber(region.region_score))}</td>
+                <td>${Number(region.row_count).toLocaleString("ru-RU")}</td>
+                <td>${escapeHtml(formatPercent(region.coverage))}</td>
+                <td>${escapeHtml(formatNumber(region.summary["Robustness Score"]))}</td>
+                <td>${escapeHtml(formatNumber(region.summary["Profit"]))}</td>
+                <td>${escapeHtml(formatNumber(region.summary["Equity DD %"]))}</td>
+                <td>${escapeHtml(formatNumber(region.summary["Profit Factor"]))}</td>
+                <td>${escapeHtml(formatRegion(region.filters))}</td>
+                <td><button type="button" data-region-index="${index}" class="apply-region-button">Apply</button></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      `;
+
+      autoSearchResults.querySelectorAll(".apply-region-button").forEach((button) => {
+        button.addEventListener("click", () => {
+          const region = state.autoSearch.regions[Number(button.dataset.regionIndex)];
+          applyRegion(region.filters);
+        });
+      });
+    }
+
+    function renderFilters() {
+      const bounds = state.analysis.parameter_bounds || {};
+      if (!state.activeFilters) {
+        filtersPanel.innerHTML = `<div class="empty">Фильтры появятся после первого анализа.</div>`;
+        return;
+      }
+
+      filtersPanel.innerHTML = state.analysis.parameters.map((parameter) => {
+        const bound = bounds[parameter];
+        const filter = state.activeFilters[parameter];
+        const step = parameter === "MultiplyLot" ? "0.1" : "1";
+        return `
+          <div class="filter-card">
+            <strong>${escapeHtml(parameter)}</strong>
+            <div class="filter-values">
+              <span>Min: ${escapeHtml(formatNumber(filter.min))}</span>
+              <span>Max: ${escapeHtml(formatNumber(filter.max))}</span>
+            </div>
+            <div class="range-stack">
+              <input type="range" min="${bound.min}" max="${bound.max}" step="${step}" value="${filter.min}" data-parameter="${escapeHtml(parameter)}" data-side="min">
+              <input type="range" min="${bound.min}" max="${bound.max}" step="${step}" value="${filter.max}" data-parameter="${escapeHtml(parameter)}" data-side="max">
+            </div>
+          </div>
+        `;
+      }).join("");
+
+      filtersPanel.querySelectorAll("input[type='range']").forEach((input) => {
+        input.addEventListener("input", handleFilterInput);
+      });
+    }
+
+    function handleFilterInput(event) {
+      const input = event.target;
+      const parameter = input.dataset.parameter;
+      const side = input.dataset.side;
+      const value = Number(input.value);
+      const current = state.activeFilters[parameter];
+      if (side === "min") {
+        current.min = Math.min(value, current.max);
+      } else {
+        current.max = Math.max(value, current.min);
+      }
+      renderFilters();
+      schedulePreviewAnalyze();
+      scheduleFullAnalyze();
+    }
+
+    function schedulePreviewAnalyze() {
+      if (state.previewTimer) {
+        clearTimeout(state.previewTimer);
+      }
+      state.previewTimer = setTimeout(() => {
+        handleAnalyze(true);
+      }, 100);
+    }
+
+    function scheduleFullAnalyze() {
+      if (state.fullTimer) {
+        clearTimeout(state.fullTimer);
+      }
+      state.fullTimer = setTimeout(() => {
+        handleAnalyze(false);
+      }, 700);
+    }
+
+    function applyRegion(filters) {
+      state.activeFilters = cloneFilters(filters);
+      renderFilters();
+      handleAnalyze(false);
+    }
+
+    function buildAnalyzeQuery(file, previewOnly = false) {
+      const query = new URLSearchParams({ file });
+      if (previewOnly) {
+        query.set("preview", "1");
+      }
+      if (!state.activeFilters) {
+        return query.toString();
+      }
+      Object.entries(state.activeFilters).forEach(([parameter, range]) => {
+        query.set(`min_${parameter}`, range.min);
+        query.set(`max_${parameter}`, range.max);
+      });
+      return query.toString();
+    }
+
+    function cloneFilters(bounds) {
+      const filters = {};
+      Object.entries(bounds).forEach(([parameter, range]) => {
+        filters[parameter] = { min: Number(range.min), max: Number(range.max) };
+      });
+      return filters;
+    }
+
     function summarizeParameters(row) {
       return state.analysis.parameters.map((parameter) => `${parameter}=${formatNumber(row[parameter])}`).join(", ");
     }
@@ -490,6 +711,10 @@
       leaderboard.innerHTML = `<div class="empty">Нет данных для отображения.</div>`;
       parameterTable.innerHTML = `<div class="empty">Нет данных для отображения.</div>`;
       bestRanges.innerHTML = `<div class="empty">Нет данных для отображения.</div>`;
+      autoSearchResults.innerHTML = `<div class="empty">После первого анализа можно запустить автоматический поиск областей.</div>`;
+      if (!state.analysis) {
+        filtersPanel.innerHTML = `<div class="empty">Фильтры появятся после первого анализа.</div>`;
+      }
     }
 
     function setStatus(message, isError = false, isOk = false) {
@@ -521,6 +746,18 @@
       return Number(start) === Number(end)
         ? formatNumber(start)
         : `${formatNumber(start)} .. ${formatNumber(end)}`;
+    }
+
+    function formatPercent(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) {
+        return "n/a";
+      }
+      return `${(number * 100).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}%`;
+    }
+
+    function formatRegion(filters) {
+      return Object.entries(filters).map(([parameter, range]) => `${parameter}=[${formatNumber(range.min)} .. ${formatNumber(range.max)}]`).join("; ");
     }
   </script>
 </body>
